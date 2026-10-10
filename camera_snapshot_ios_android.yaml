@@ -1,0 +1,100 @@
+blueprint:
+  name: Kamera-Snapshot an iOS und Android
+  description: Sendet bei Auslösung eines Sensors ein Live-Kamerabild getrennt an iOS- (Attachment) und Android-Geräte (Image).
+  domain: automation
+  input:
+    trigger_sensor:
+      name: Auslöser (Bewegung/Person)
+      description: Der Sensor, der die Automation startet.
+      selector:
+        entity:
+          domain: binary_sensor
+    camera_entity:
+      name: Kamera
+      description: Die Kamera, von der das Bild geholt wird.
+      selector:
+        entity:
+          domain: camera
+    ios_notify:
+      name: iOS Benachrichtigungs-Dienst
+      description: "Z.B. notify.mobile_app_iphone. Leer lassen, falls nicht benötigt."
+      default: ""
+      selector:
+        text:
+    android_notify:
+      name: Android Benachrichtigungs-Dienst
+      description: "Z.B. notify.mobile_app_pixel_8. Leer lassen, falls nicht benötigt."
+      default: ""
+      selector:
+        text:
+    message_text:
+      name: Nachrichtentext
+      description: Der Text der Push-Benachrichtigung.
+      default: "Wer ist da?"
+      selector:
+        text:
+    cooldown:
+      name: Cooldown (Sekunden)
+      description: Zeit, die mindestens bis zur nächsten Benachrichtigung vergehen muss (Spam-Schutz).
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 600
+          unit_of_measurement: seconds
+    delay_time:
+      name: Verzögerung (Sekunden)
+      description: Zeit, die gewartet wird, bevor das Bild von der Kamera abgerufen wird.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 10
+          unit_of_measurement: seconds
+
+mode: single
+
+variables:
+  camera: !input camera_entity
+  cooldown_time: !input cooldown
+  ios_service: !input ios_notify
+  android_service: !input android_notify
+
+triggers:
+  - trigger: state
+    entity_id: !input trigger_sensor
+    from: "off"
+    to: "on"
+
+conditions:
+  - condition: template
+    value_template: >
+      {{ this.attributes.last_triggered is none or (now() - this.attributes.last_triggered).total_seconds() > cooldown_time }}
+
+actions:
+  - delay:
+      seconds: !input delay_time
+  # --- Sende an iOS (falls ein Dienst angegeben wurde) ---
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ ios_service | length > 0 }}"
+        sequence:
+          - action: "{{ ios_service }}"
+            data:
+              message: !input message_text
+              data:
+                attachment:
+                  url: "/api/camera_proxy/{{ camera }}"
+                  content-type: jpeg
+  # --- Sende an Android (falls ein Dienst angegeben wurde) ---
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ android_service | length > 0 }}"
+        sequence:
+          - action: "{{ android_service }}"
+            data:
+              message: !input message_text
+              data:
+                image: "/api/camera_proxy/{{ camera }}"
