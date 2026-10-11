@@ -1,6 +1,6 @@
 blueprint:
-  name: Kamera-Snapshot an iOS und Android
-  description: Sendet bei Auslösung eines Sensors ein Live-Kamerabild getrennt an iOS- (Attachment) und Android-Geräte (Image).
+  name: Kamera-Snapshot an iOS und Android (mit Alarm & HA-Stream Link)
+  description: Sendet ein Live-Kamerabild an Mobilgeräte. Beim Antippen öffnet sich direkt der Live-Stream der Kamera in Home Assistant.
   domain: automation
   input:
     trigger_sensor:
@@ -15,18 +15,24 @@ blueprint:
       selector:
         entity:
           domain: camera
-    ios_notify:
-      name: iOS Benachrichtigungs-Dienst
-      description: "Z.B. notify.mobile_app_iphone. Leer lassen, falls nicht benötigt."
+          
+    # --- Geräte-Dropdowns ---
+    ios_device:
+      name: iOS Gerät (Dropdown)
+      description: Wähle dein Apple-Gerät. (Leer lassen, falls nicht benötigt).
       default: ""
       selector:
-        text:
-    android_notify:
-      name: Android Benachrichtigungs-Dienst
-      description: "Z.B. notify.mobile_app_pixel_8. Leer lassen, falls nicht benötigt."
+        device:
+          integration: mobile_app
+    android_device:
+      name: Android Gerät (Dropdown)
+      description: Wähle dein Android-Gerät. (Leer lassen, falls nicht benötigt).
       default: ""
       selector:
-        text:
+        device:
+          integration: mobile_app
+          
+    # --- Benachrichtigungs-Einstellungen ---
     message_text:
       name: Nachrichtentext
       description: Der Text der Push-Benachrichtigung.
@@ -42,23 +48,35 @@ blueprint:
           min: 0
           max: 600
           unit_of_measurement: seconds
-    delay_time:
-      name: Verzögerung (Sekunden)
-      description: Zeit, die gewartet wird, bevor das Bild von der Kamera abgerufen wird.
-      default: 1
+          
+    # --- Alarm Feature ---
+    enable_alarm:
+      name: Alarm-Funktion aktivieren
+      description: Wenn aktiviert, wird im definierten Zeitraum eine "Critical Alert" Push (laut) gesendet. Außerhalb der Zeit kommt eine normale Push.
+      default: false
       selector:
-        number:
-          min: 0
-          max: 10
-          unit_of_measurement: seconds
+        boolean:
+    alarm_time_start:
+      name: Alarm Zeitraum Start
+      description: Ab wann soll der Alarm aktiv sein?
+      default: "22:30:00"
+      selector:
+        time:
+    alarm_time_end:
+      name: Alarm Zeitraum Ende
+      description: Bis wann soll der Alarm aktiv sein?
+      default: "05:15:00"
+      selector:
+        time:
 
 mode: single
 
 variables:
   camera: !input camera_entity
   cooldown_time: !input cooldown
-  ios_service: !input ios_notify
-  android_service: !input android_notify
+  ios_dev: !input ios_device
+  android_dev: !input android_device
+  alarm_on: !input enable_alarm
 
 triggers:
   - trigger: state
@@ -72,29 +90,76 @@ conditions:
       {{ this.attributes.last_triggered is none or (now() - this.attributes.last_triggered).total_seconds() > cooldown_time }}
 
 actions:
-  - delay:
-      seconds: !input delay_time
-  # --- Sende an iOS (falls ein Dienst angegeben wurde) ---
+  # --- Sende an iOS ---
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ ios_service | length > 0 }}"
+            value_template: "{{ ios_dev != '' and ios_dev != none }}"
+          - condition: template
+            value_template: "{{ alarm_on }}"
+          - condition: time
+            after: !input alarm_time_start
+            before: !input alarm_time_end
         sequence:
-          - action: "{{ ios_service }}"
+          - domain: mobile_app
+            type: notify
+            device_id: !input ios_device
+            message: !input message_text
             data:
-              message: !input message_text
-              data:
-                attachment:
-                  url: "/api/camera_proxy/{{ camera }}"
-                  content-type: jpeg
-  # --- Sende an Android (falls ein Dienst angegeben wurde) ---
+              url: "entityId:{{ camera }}"  # <-- HA Deep-Link zum Kamera-Stream
+              attachment:
+                url: "/api/camera_proxy/{{ camera }}"
+                content-type: jpeg
+              push: null
+              sound:
+                name: default
+                critical: 1
+                volume: 0.8
+                
+      - conditions:
+          - condition: template
+            value_template: "{{ ios_dev != '' and ios_dev != none }}"
+        sequence:
+          - domain: mobile_app
+            type: notify
+            device_id: !input ios_device
+            message: !input message_text
+            data:
+              url: "entityId:{{ camera }}"  # <-- HA Deep-Link zum Kamera-Stream
+              attachment:
+                url: "/api/camera_proxy/{{ camera }}"
+                content-type: jpeg
+
+  # --- Sende an Android ---
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ android_service | length > 0 }}"
+            value_template: "{{ android_dev != '' and android_dev != none }}"
+          - condition: template
+            value_template: "{{ alarm_on }}"
+          - condition: time
+            after: !input alarm_time_start
+            before: !input alarm_time_end
         sequence:
-          - action: "{{ android_service }}"
+          - domain: mobile_app
+            type: notify
+            device_id: !input android_device
+            message: !input message_text
             data:
-              message: !input message_text
-              data:
-                image: "/api/camera_proxy/{{ camera }}"
+              clickAction: "entityId:{{ camera }}"  # <-- HA Deep-Link zum Kamera-Stream
+              image: "/api/camera_proxy/{{ camera }}"
+              ttl: 0
+              priority: high
+              channel: alarm_stream
+              
+      - conditions:
+          - condition: template
+            value_template: "{{ android_dev != '' and android_dev != none }}"
+        sequence:
+          - domain: mobile_app
+            type: notify
+            device_id: !input android_device
+            message: !input message_text
+            data:
+              clickAction: "entityId:{{ camera }}"  # <-- HA Deep-Link zum Kamera-Stream
+              image: "/api/camera_proxy/{{ camera }}"
